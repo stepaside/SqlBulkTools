@@ -5,6 +5,7 @@ using System.Data.SqlClient;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace SqlBulkTools
@@ -36,7 +37,7 @@ namespace SqlBulkTools
         private bool _deleteWhenNotMatchedFlag;
         private readonly HashSet<string> _disableIndexList;
         private readonly SqlBulkCopyOptions _sqlBulkCopyOptions;
-        private readonly Dictionary<int, T> _outputIdentityDic; 
+        private readonly Dictionary<int, T> _outputIdentityDic;
 
         /// <summary>
         /// 
@@ -87,7 +88,7 @@ namespace SqlBulkTools
 
         /// <summary>
         /// At least one MatchTargetOn is required for correct configuration. MatchTargetOn is the matching clause for evaluating 
-        /// each row in table. This is usally set to the unique identifier in the table (e.g. Id). Multiple MatchTargetOn members are allowed 
+        /// each row in table. This is usually set to the unique identifier in the table (e.g. Id). Multiple MatchTargetOn members are allowed 
         /// for matching composite relationships. 
         /// </summary>
         /// <param name="columnName"></param>
@@ -207,7 +208,7 @@ namespace SqlBulkTools
                         command.CommandTimeout = _sqlTimeout;
                         
                         //Creating temp table on database
-                        command.CommandText = _helper.BuildCreateTempTable(_columns, dtCols, _outputIdentity);
+                        command.CommandText = _helper.BuildCreateTempTable(new HashSet<string>(_columns.Concat(_matchTargetOn)), dtCols, _outputIdentity);
                         command.ExecuteNonQuery();
 
                         _helper.InsertToTmpTable(conn, transaction, dt, _bulkCopyEnableStreaming, _bulkCopyBatchSize,
@@ -226,7 +227,7 @@ namespace SqlBulkTools
                         //    command.ExecuteNonQuery();
                         //}
 
-                        string comm =
+                        var mergeSql =
                             _helper.GetOutputCreateTableCmd(_outputIdentity, "#TmpOutput", OperationType.Insert) +
                             "MERGE INTO " + _helper.GetFullQualifyingTableName(conn.Database, _schema, _tableName) +
                             " WITH (HOLDLOCK) AS Target " +
@@ -241,7 +242,7 @@ namespace SqlBulkTools
                             _helper.GetOutputIdentityCmd(_identityColumn, _outputIdentity, "#TmpOutput",
                                 OperationType.Insert) +
                             "DROP TABLE #TmpTable;";
-                        command.CommandText = comm;
+                        command.CommandText = mergeSql;
                         command.ExecuteNonQuery();
 
                         if (_disableIndexList != null && _disableIndexList.Any())
@@ -254,28 +255,19 @@ namespace SqlBulkTools
                         {
                             command.CommandText = "SELECT InternalId, Id FROM #TmpOutput;";
 
-                            using (SqlDataReader reader = command.ExecuteReader())
+                            using (var reader = command.ExecuteReader())
                             {
                                 var list = _list.ToList();
 
                                 while (reader.Read())
                                 {
-
                                     var test = reader[0];
                                     var test2 = reader[1];
 
-                                    T item;
-
-                                    if (_outputIdentityDic.TryGetValue((int)reader[0], out item))
-                                    {
-                                        Type type = item.GetType();
-
-                                        PropertyInfo prop = type.GetProperty(_identityColumn);
-
-                                        prop.SetValue(item, reader[1], null);
-                                    }
-
-
+                                    if (!_outputIdentityDic.TryGetValue((int) reader[0], out var item)) continue;
+                                    var type = item.GetType();
+                                    var prop = type.GetProperty(_identityColumn);
+                                    prop?.SetValue(item, reader[1], null);
                                 }
                             }
 
@@ -287,12 +279,12 @@ namespace SqlBulkTools
 
                     catch (SqlException e)
                     {
-                        for (int i = 0; i < e.Errors.Count; i++)
+                        for (var i = 0; i < e.Errors.Count; i++)
                         {
                             // Error 8102 is identity error. 
                             if (e.Errors[i].Number == 8102)
                             {
-                                // Expensive call but neccessary to inform user of an important configuration setup. 
+                                // Expensive call but necessary to inform user of an important configuration setup. 
                                 throw new IdentityException(e.Errors[i].Message);
                             }
                         }
@@ -364,7 +356,7 @@ namespace SqlBulkTools
                         }
 
                         // Updating destination table, and dropping temp table                       
-                        string comm = "MERGE INTO " + _helper.GetFullQualifyingTableName(conn.Database, _schema, _tableName) + " WITH (HOLDLOCK) AS Target " +
+                        var comm = "MERGE INTO " + _helper.GetFullQualifyingTableName(conn.Database, _schema, _tableName) + " WITH (HOLDLOCK) AS Target " +
                                       "USING #TmpTable AS Source " +
                                       _helper.BuildJoinConditionsForUpdateOrInsert(_matchTargetOn.ToArray(),
                                           _sourceAlias, _targetAlias) +
@@ -394,7 +386,7 @@ namespace SqlBulkTools
                             // Error 8102 is identity error. 
                             if (e.Errors[i].Number == 8102)
                             {
-                                // Expensive call but neccessary to inform user of an important configuration setup. 
+                                // Expensive call but necessary to inform user of an important configuration setup. 
                                 throw new IdentityException(e.Errors[i].Message);
                             }
                         }

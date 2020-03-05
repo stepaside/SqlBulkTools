@@ -39,7 +39,6 @@ namespace SqlBulkTools
             if (_transaction == null)
                 throw new InvalidOperationException("No setup found. Use the Setup method to build a new setup then try again.");
             
-
             _transaction.CommitTransaction(connectionName, credentials);
         }
 

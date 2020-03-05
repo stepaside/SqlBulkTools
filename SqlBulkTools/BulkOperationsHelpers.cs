@@ -25,11 +25,10 @@ namespace SqlBulkTools
 
         internal string BuildCreateTempTable(HashSet<string> columns, DataTable schema, bool? outputIdentity = null)
         {
-            Dictionary<string, string> actualColumns = new Dictionary<string, string>();
-            Dictionary<string, string> actualColumnsMaxCharLength = new Dictionary<string, string>();
-            Dictionary<string, PrecisionType> actualColumnsPrecision = new Dictionary<string, PrecisionType>();
-
-
+            var actualColumns = new Dictionary<string, string>();
+            var actualColumnsMaxCharLength = new Dictionary<string, string>();
+            var actualColumnsPrecision = new Dictionary<string, PrecisionType>();
+            
             foreach (DataRow row in schema.Rows)
             {
                 string columnType = row["DATA_TYPE"].ToString();
@@ -48,7 +47,7 @@ namespace SqlBulkTools
 
                 if (columnType == "numeric" || columnType == "decimal")
                 {
-                    PrecisionType p = new PrecisionType
+                    var p = new PrecisionType
                     {
                         NumericPrecision = row["NUMERIC_PRECISION"].ToString(),
                         NumericScale = row["NUMERIC_SCALE"].ToString()
@@ -58,7 +57,7 @@ namespace SqlBulkTools
 
             }
 
-            StringBuilder command = new StringBuilder();
+            var command = new StringBuilder();
 
             command.Append("CREATE TABLE #TmpTable(");
 
@@ -66,10 +65,8 @@ namespace SqlBulkTools
 
             foreach (var column in columns.ToList())
             {
-                if (column == "InternalId")
-                    continue;
-                string columnType;
-                if (actualColumns.TryGetValue(column, out columnType))
+                if (column == "InternalId") continue;
+                if (actualColumns.TryGetValue(column, out var columnType))
                 {
                     columnType = GetVariableCharType(column, columnType, actualColumnsMaxCharLength);
                     columnType = GetDecimalPrecisionAndScaleType(column, columnType, actualColumnsPrecision);
@@ -91,30 +88,44 @@ namespace SqlBulkTools
             return command.ToString();
         }
 
-        private string GetVariableCharType(string column, string columnType, Dictionary<string, string> actualColumnsMaxCharLength)
+        private string GetVariableCharType(string column, string columnType, IReadOnlyDictionary<string, string> actualColumnsMaxCharLength)
         {
-            if (columnType == "varchar" || columnType == "nvarchar")
+            switch (columnType)
             {
-                string maxCharLength;
-                if (actualColumnsMaxCharLength.TryGetValue(column, out maxCharLength))
+                case "varchar":
+                case "nvarchar":
                 {
-                    if (maxCharLength == "-1")
-                        maxCharLength = "max";
+                    if (actualColumnsMaxCharLength.TryGetValue(column, out var maxCharLength))
+                    {
+                        if (maxCharLength == "-1")
+                        {
+                            maxCharLength = "max";
+                        }
 
-                    columnType = columnType + "(" + maxCharLength + ")";
+                        columnType = columnType + "(" + maxCharLength + ")";
+                    }
+
+                    break;
+                }
+                case "char":
+                {
+                    if (actualColumnsMaxCharLength.TryGetValue(column, out var maxCharLength))
+                    {
+                        columnType = columnType + "(" + maxCharLength + ")";
+                    }
+
+                    break;
                 }
             }
 
             return columnType;
         }
 
-        private string GetDecimalPrecisionAndScaleType(string column, string columnType, Dictionary<string, PrecisionType> actualColumnsPrecision)
+        private string GetDecimalPrecisionAndScaleType(string column, string columnType, IReadOnlyDictionary<string, PrecisionType> actualColumnsPrecision)
         {
             if (columnType == "decimal" || columnType == "numeric")
             {
-                PrecisionType p;
-
-                if (actualColumnsPrecision.TryGetValue(column, out p))
+                if (actualColumnsPrecision.TryGetValue(column, out var p))
                 {
                     columnType = columnType + "(" + p.NumericPrecision + ", " + p.NumericScale + ")";
                 }
@@ -194,7 +205,7 @@ namespace SqlBulkTools
         {
             LambdaExpression lambda = method as LambdaExpression;
             if (lambda == null)
-                throw new ArgumentNullException("method");
+                throw new ArgumentNullException(nameof(method));
 
             MemberExpression memberExpr = null;
 
@@ -216,42 +227,38 @@ namespace SqlBulkTools
 
         internal DataTable ToDataTable<T>(IEnumerable<T> items, HashSet<string> columns, Dictionary<string, string> columnMappings, List<string> matchOnColumns = null, bool? outputIdentity = null, Dictionary<int, T> outputIdentityDic = null)
         {
-            DataTable dataTable = new DataTable(typeof(T).Name);
+            var dataTable = new DataTable(typeof(T).Name);
+            
+            var tableColumns = new HashSet<string>(columns);
 
             if (matchOnColumns != null)
             {
-                columns = CheckForAdditionalColumns(columns, matchOnColumns);
+                tableColumns = CheckForAdditionalColumns(tableColumns, matchOnColumns);
             }
 
             if (outputIdentity.HasValue && outputIdentity.Value)
             {
+                tableColumns.Add("InternalId");
                 columns.Add("InternalId");
             }
 
             //Get all the properties
-            PropertyInfo[] props = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            var props = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance);
 
-            foreach (var column in columns.ToList())
+            foreach (var column in tableColumns.ToList())
             {
-                if (columnMappings.ContainsKey(column))
-                {
-                    dataTable.Columns.Add(columnMappings[column]);
-                }
-
-                else
-                    dataTable.Columns.Add(column);
+                dataTable.Columns.Add(columnMappings.ContainsKey(column) ? columnMappings[column] : column);
             }
 
-            AssignTypes(props, columns, dataTable, outputIdentity);
+            AssignTypes(props, tableColumns, dataTable, outputIdentity);
 
-            int counter = 0;
+            var counter = 0;
 
-            foreach (T item in items)
+            foreach (var item in items)
             {
-                
                 var values = new List<object>();
 
-                foreach (var column in columns.ToList())
+                foreach (var column in tableColumns.ToList())
                 {
                     if (column == "InternalId")
                     {
@@ -259,11 +266,15 @@ namespace SqlBulkTools
                         outputIdentityDic.Add(counter, item);
                     }
                     else
-                        for (int i = 0; i < props.Length; i++)
+                    {
+                        foreach (var t in props)
                         {
-                            if (props[i].Name == column && item != null)
-                                values.Add(props[i].GetValue(item, null));
+                            if (t.Name == column && item != null)
+                            {
+                                values.Add(t.GetValue(item, null));
+                            }
                         }
+                    }
 
                 }
                 counter++;
@@ -275,7 +286,7 @@ namespace SqlBulkTools
 
         private void AssignTypes(PropertyInfo[] props, HashSet<string> columns, DataTable dataTable, bool? outputIdentity = null)
         {
-            int count = 0;
+            var count = 0;
 
             foreach (var column in columns.ToList())
             {
@@ -392,26 +403,26 @@ namespace SqlBulkTools
         /// <summary>
         /// Advanced Settings for SQLBulkCopy class. 
         /// </summary>
-        /// <param name="bulkcopy"></param>
+        /// <param name="bulkCopy"></param>
         /// <param name="bulkCopyEnableStreaming"></param>
         /// <param name="bulkCopyBatchSize"></param>
         /// <param name="bulkCopyNotifyAfter"></param>
         /// <param name="bulkCopyTimeout"></param>
-        internal void SetSqlBulkCopySettings(SqlBulkCopy bulkcopy, bool bulkCopyEnableStreaming, int? bulkCopyBatchSize, int? bulkCopyNotifyAfter, int bulkCopyTimeout)
+        internal void SetSqlBulkCopySettings(SqlBulkCopy bulkCopy, bool bulkCopyEnableStreaming, int? bulkCopyBatchSize, int? bulkCopyNotifyAfter, int bulkCopyTimeout)
         {
-            bulkcopy.EnableStreaming = bulkCopyEnableStreaming;
+            bulkCopy.EnableStreaming = bulkCopyEnableStreaming;
 
             if (bulkCopyBatchSize.HasValue)
             {
-                bulkcopy.BatchSize = bulkCopyBatchSize.Value;
+                bulkCopy.BatchSize = bulkCopyBatchSize.Value;
             }
 
             if (bulkCopyNotifyAfter.HasValue)
             {
-                bulkcopy.NotifyAfter = bulkCopyNotifyAfter.Value;
+                bulkCopy.NotifyAfter = bulkCopyNotifyAfter.Value;
             }
 
-            bulkcopy.BulkCopyTimeout = bulkCopyTimeout;
+            bulkCopy.BulkCopyTimeout = bulkCopyTimeout;
         }
 
 
@@ -426,15 +437,14 @@ namespace SqlBulkTools
 
             foreach (var column in columns.ToList())
             {
-                string mapping;
-
-                if (customColumnMappings.TryGetValue(column, out mapping))
+                if (customColumnMappings.TryGetValue(column, out var mapping))
                 {
                     bulkCopy.ColumnMappings.Add(mapping, mapping);
                 }
-
                 else
+                {
                     bulkCopy.ColumnMappings.Add(column, column);
+                }
             }
 
         }
@@ -474,10 +484,10 @@ namespace SqlBulkTools
             return sb.ToString();
         }
 
-        internal string GetOutputCreateTableCmd(bool outputIdentity, string tmpTablename, OperationType operation)
+        internal string GetOutputCreateTableCmd(bool outputIdentity, string tmpTableName, OperationType operation)
         {
             if (operation == OperationType.Insert)
-                return (outputIdentity ? "CREATE TABLE " + tmpTablename + "(InternalId int, Id int); " : "");
+                return (outputIdentity ? "CREATE TABLE " + tmpTableName + "(InternalId int, Id int); " : "");
 
             return string.Empty;
         }
@@ -530,30 +540,75 @@ namespace SqlBulkTools
 
         internal void InsertToTmpTable(SqlConnection conn, SqlTransaction transaction, DataTable dt, bool bulkCopyEnableStreaming, int? bulkCopyBatchSize, int? bulkCopyNotifyAfter, int bulkCopyTimeout, SqlBulkCopyOptions sqlBulkCopyOptions)
         {
-            using (SqlBulkCopy bulkcopy = new SqlBulkCopy(conn, sqlBulkCopyOptions, transaction))
+            SqlBulkCopy bulkCopy = null;
+            try
             {
-                bulkcopy.DestinationTableName = "#TmpTable";
+                bulkCopy = new SqlBulkCopy(conn, sqlBulkCopyOptions, transaction) {DestinationTableName = "#TmpTable"};
 
-                SetSqlBulkCopySettings(bulkcopy, bulkCopyEnableStreaming,
-                    bulkCopyBatchSize,
-                    bulkCopyNotifyAfter, bulkCopyTimeout);
+                SetSqlBulkCopySettings(bulkCopy, bulkCopyEnableStreaming, bulkCopyBatchSize, bulkCopyNotifyAfter, bulkCopyTimeout);
 
-                bulkcopy.WriteToServer(dt);
+                bulkCopy.WriteToServer(dt);
+            }
+            catch (SqlException ex)
+            {
+                if (!ProcessSqlException(ex, bulkCopy)) throw;
+            }
+            finally
+            {
+                ((IDisposable)bulkCopy)?.Dispose();
+            }
+        }
+        
+        internal async Task InsertToTmpTableAsync(SqlConnection conn, SqlTransaction transaction, DataTable dt, bool bulkCopyEnableStreaming, int? bulkCopyBatchSize, int? bulkCopyNotifyAfter, int bulkCopyTimeout, SqlBulkCopyOptions sqlBulkCopyOptions)
+        {
+            SqlBulkCopy bulkCopy = null;
+            try
+            {
+                bulkCopy = new SqlBulkCopy(conn, sqlBulkCopyOptions, transaction) {DestinationTableName = "#TmpTable"};
+
+                SetSqlBulkCopySettings(bulkCopy, bulkCopyEnableStreaming, bulkCopyBatchSize, bulkCopyNotifyAfter,  bulkCopyTimeout);
+
+                await bulkCopy.WriteToServerAsync(dt);
+            }
+            catch (AggregateException ex)
+            {
+                if (ex.InnerException is SqlException sqlEx)
+                {
+                    if (!ProcessSqlException(sqlEx, bulkCopy)) throw;
+                }
+                else
+                {
+                    throw;
+                }
+            }
+            catch (SqlException ex)
+            {
+                if (!ProcessSqlException(ex, bulkCopy)) throw;
+            }
+            finally
+            {
+                ((IDisposable)bulkCopy)?.Dispose();
             }
         }
 
-        internal async Task InsertToTmpTableAsync(SqlConnection conn, SqlTransaction transaction, DataTable dt, bool bulkCopyEnableStreaming, int? bulkCopyBatchSize, int? bulkCopyNotifyAfter, int bulkCopyTimeout, SqlBulkCopyOptions sqlBulkCopyOptions)
+        private static bool ProcessSqlException(SqlException ex, SqlBulkCopy bulkCopy)
         {
-            using (SqlBulkCopy bulkcopy = new SqlBulkCopy(conn, sqlBulkCopyOptions, transaction))
-            {
-                bulkcopy.DestinationTableName = "#TmpTable";
+            if (!ex.Message.Contains("Received an invalid column length from the bcp client for colid") || ex.Number != 4815) return false;
+            var match = Regex.Match(ex.Message, @"\d+");
+            var index = Convert.ToInt32(match.Value) - 1;
 
-                SetSqlBulkCopySettings(bulkcopy, bulkCopyEnableStreaming,
-                    bulkCopyBatchSize,
-                    bulkCopyNotifyAfter, bulkCopyTimeout);
+            var fi = typeof(SqlBulkCopy).GetField("_sortedColumnMappings", BindingFlags.NonPublic | BindingFlags.Instance);
+            var sortedColumns = fi?.GetValue(bulkCopy);
+            var items = (object[])sortedColumns?.GetType().GetField("_items", BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(sortedColumns);
 
-                await bulkcopy.WriteToServerAsync(dt);
-            }
+            if (items == null) return false;
+
+            var itemData = items[index].GetType().GetField("_metadata", BindingFlags.NonPublic | BindingFlags.Instance);
+            var metaData = itemData?.GetValue(items[index]);
+
+            var column = metaData?.GetType().GetField("column", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(metaData);
+            var length = metaData?.GetType().GetField("length", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(metaData);
+            throw new FormatException($"Column: {column} contains data with a length greater than: {length}");
         }
     }
 
